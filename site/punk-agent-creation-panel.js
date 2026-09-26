@@ -87,7 +87,19 @@ export function mountAgentWalletCreation({ root, getContext, getProvider, onCrea
     busy = true; render(); changed();
     try { await action(c, provider, isCurrent); }
     catch (error) { if (isCurrent()) status.textContent = error?.message ?? 'Creation could not be checked. Preserve any saved transaction.'; }
-    finally { busy = false; refresh(); changed(); }
+    finally {
+      busy = false; refresh();
+      // A mobile provider/selection change can occur while the wallet is open.
+      // Its late hash belongs to the durable owner journal, even though the old
+      // UI result no longer has authority to update the selected Punk snapshot.
+      if (!isCurrent() && current()?.owner === c.owner) {
+        try {
+          loadRecord();
+          if (pending(record)) status.textContent = 'Your creation request is saved. Check its transaction below before creating another Punk wallet; it will not be resent.';
+        } catch (error) { journalError = true; status.textContent = error.message; }
+      }
+      render(); changed();
+    }
     return getState();
   }
   async function ready(value, isCurrent) {

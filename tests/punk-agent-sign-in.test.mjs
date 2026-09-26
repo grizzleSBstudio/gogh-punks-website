@@ -38,6 +38,18 @@ test('repeated sign-in and background callers await the authenticated request',a
   await Promise.resolve();assert.equal(signIns,1);login.resolve();
   const values=await Promise.all(calls);assert.ok(values.every(v=>v===values[0]));
 });
+test('a fresh post-confirmation read waits for an already requested login without opening another signature',async()=>{
+  const login=deferred();let signIns=0,reads=0;
+  const f=fixture({ensureV2Session:()=>{signIns++;return login.promise;},jsonRequest:async()=>{
+    reads++;return {ok:true,owner,tokenId:'93',readiness:{setupAvailable:true}};
+  }});
+  const signing=f.loadAgentAccountStatus({authenticate:true});await Promise.resolve();
+  const fresh=f.loadAgentAccountStatus({fresh:true});await Promise.resolve();
+  assert.equal(signIns,1);assert.equal(reads,0);
+  login.resolve();await Promise.all([signing,fresh]);
+  assert.equal(signIns,1);assert.equal(reads,1);assert.equal(f.notifications.length,1);
+  assert.equal(f.state.agentAccountLoading.size,0);
+});
 test('an old owner response cannot restore cleared mission state',async()=>{
   const read=deferred(),f=fixture({jsonRequest:()=>read.promise});
   const pending=f.loadAgentAccountStatus();await Promise.resolve();

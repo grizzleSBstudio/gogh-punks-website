@@ -137,3 +137,41 @@ test('the real mobile wallet pending event immediately removes displayed gas and
   assert.equal(f.one('[data-agent-gas-form] button[type="submit"]').disabled, true);
   assert.equal(f.reads.length, 0);
 });
+
+test('mobile wallet return rechecks the selected Punk without a reload, sign-in or new ownership scan', async () => {
+  const f = fixture(); f.state.ownershipAccount=owner; f.render();
+  let walletEvent;
+  Object.assign(f.context, {
+    window: { addEventListener: (_name, handler) => { walletEvent=handler; } },
+    persistentWatchControl:null,swarmWalletControl:null,agentCreationControl:null,
+    forgeSkillAdminControl:null,brokerPreferences:null,gasFundingRecovery:null,
+    renderMissionBadges(){},renderActivationGuide(){},ownerRefresh:{invalidate(){}},clearTransferredPunkReview(){},
+    fetchOwnedPunks(){throw Error('Known owner roster must not require another scan');},
+  });
+  vm.runInContext(section('window.addEventListener("gogh:wallet-state"', '\n  if (PREVIEW) { previewData()'),f.context);
+  await walletEvent({detail:{account:null,status:'pending',restoring:true}});
+  await walletEvent({detail:{account:owner,chainId:4663,status:'owner'}});await Promise.resolve();
+  assert.equal(f.reads.length,1,'returning to the same owner must replace readiness cleared during wallet restore');
+  assert.equal(f.reads[0].path,'/api/v2/punks/93/agent-account');
+  const pending=f.state.agentAccountLoading.get('93').promise;
+  f.reads[0].resolve(status('93'));await pending;
+  assert.equal(f.one('[data-agent-gas-form] button[type="submit"]').disabled,false);
+  await walletEvent({detail:{account:owner,chainId:4663,status:'owner'}});
+  assert.equal(f.reads.length,1,'ordinary same-owner events must not create a request loop');
+  f.context.selectPunk('94');await Promise.resolve();
+  const next=f.state.agentAccountLoading.get('94').promise;
+  f.reads[1].resolve(status('94','0'));await next;
+  assert.equal(f.selected().tokenId,'94');assert.equal(f.one('[data-agent-gas-native]').textContent,'0 ETH');
+});
+
+test('a confirmed mutation requests fresh readiness instead of reusing an older in-flight read',async()=>{
+  const f=fixture();f.state.agentAccounts.clear();
+  const old=f.context.loadAgentAccountStatus();await Promise.resolve();
+  const current=f.context.loadAgentAccountStatus({fresh:true});await Promise.resolve();
+  assert.equal(f.reads.length,2,'a confirmation needs a read started after the receipt');
+  f.reads[1].resolve(status('93','1000000000000000'));await current;
+  f.reads[0].resolve({...status('93','0'),runtime:{accountCreated:false}});await old;
+  assert.equal(f.selected().runtime.accountCreated,true);
+  assert.equal(f.one('[data-agent-gas-native]').textContent,'0.001 ETH');
+  assert.equal(f.notifications.length,1,'the superseded pre-transaction read cannot publish stale status');
+});

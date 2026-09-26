@@ -105,6 +105,40 @@ test('duplicate confirmation while wallet prompt is pending sends only once', as
   assert.equal(f.state.callbacks.length, 0);
 });
 
+test('a mobile provider replacement keeps the late submitted hash visible for receipt recovery',async()=>{
+  const f=fixture(),wait=deferred();await f.checkAndPrepare();f.consent();
+  f.state.submit=()=>{f.state.record=f.saved('WALLET_REQUESTED');return wait.promise;};
+  const confirming=f.node('confirm').click();
+  f.state.provider={};f.mounted.refresh();
+  assert.equal(f.node('hash').value,'');
+  f.state.record=f.saved('SUBMITTED');wait.resolve(f.state.record);await confirming;
+  assert.equal(f.node('hash').value,HASH,'the durable hash must not require a page reload');
+  assert.equal(f.node('recover').disabled,false);assert.equal(f.node('prepare').disabled,true);
+  await f.node('recover').click();
+  assert.equal(f.mounted.getState().record.status,'CONFIRMED');
+  f.state.context.tokenId='94';f.state.created=false;f.mounted.refresh();await f.mounted.check();
+  assert.equal(f.node('prepare').disabled,false,'the next Punk can prepare after the original request is reconciled');
+  assert.equal(f.state.calls.filter(call=>call==='submit').length,1);
+});
+
+test('two Punks can be created consecutively without remounting or deleting the terminal journal',async()=>{
+  const f=fixture(),completed=[];
+  for(const tokenId of ['93','94']) {
+    f.state.context.tokenId=tokenId;f.state.created=false;f.mounted.refresh();
+    if(completed.length) assert.equal(f.mounted.getState().record.status,'CONFIRMED');
+    f.state.prepare=()=>({...f.review(),tokenId});
+    f.state.submit=()=>f.state.record={...f.saved('SUBMITTED'),review:{...f.review(),tokenId}};
+    f.state.recover=()=>{f.state.created=true;return f.state.record={...f.state.record,status:'CONFIRMED'};};
+    await f.checkAndPrepare();assert.equal(f.node('confirm').disabled,true);
+    assert.equal(f.node('consent').checked,false,'each Punk needs its own consent');
+    f.consent();await f.node('confirm').click();await f.node('recover').click();
+    assert.equal(f.state.record.status,'CONFIRMED');
+    assert.equal(f.state.record.review.tokenId,tokenId);completed.push(tokenId);
+  }
+  assert.deepEqual(f.state.callbacks.map(value=>value.tokenId),['93','94']);
+  assert.equal(f.state.calls.filter(call=>call==='submit').length,2);
+});
+
 test('explicit 4001 rejection clears confirmation and allows a new separate review', async () => {
   const f = fixture(); await f.checkAndPrepare(); f.consent(); f.state.submit = () => f.state.record = f.saved('REJECTED');
   await f.node('confirm').click(); assert.equal(f.node('recovery').hidden, true); assert.equal(f.node('consent').checked, false);

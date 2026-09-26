@@ -144,7 +144,7 @@ test("funding exposes hardened ETH funding and canonical WETH wrap submission", 
 test("transient wallet frames do not erase or repeatedly reload a verified Punk roster", async () => {
   const script = await readFile(new URL("../site/broker-v2.js", import.meta.url), "utf8");
   assert.match(script, /verifiedSameAccount && \(wallet\.chainId == null \|\| wallet\.status === "pending"\)/);
-  assert.match(script, /verifiedSameAccount \|\| state\.ownershipLoadingAccount === account/);
+  assert.match(script, /if \(verifiedSameAccount\) \{[\s\S]*?loadAgentAccountStatus\(\{ fresh: true \}\);\s*return;\s*\}\s*if \(state\.ownershipLoadingAccount === account\) return;/);
   assert.match(script, /requestId !== state\.ownershipRequestId/);
   assert.match(script, /punks\.find\(\(punk\) => punk\.tokenId === selectedTokenId\)/);
 });

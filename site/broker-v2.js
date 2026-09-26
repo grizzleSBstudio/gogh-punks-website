@@ -196,7 +196,7 @@ function blockerLabel(value) {
   return String(value ?? "NOT_READY").replaceAll("_", " ");
 }
 
-async function loadAgentAccountStatus({ authenticate = false } = {}) {
+async function loadAgentAccountStatus({ authenticate = false, fresh = false } = {}) {
   if (PREVIEW || !state.selected?.tokenId || !state.wallet?.account
     || state.wallet.chainId !== CHAIN_ID) return null;
   const tokenId = String(state.selected.tokenId);
@@ -204,7 +204,11 @@ async function loadAgentAccountStatus({ authenticate = false } = {}) {
   const pending = state.agentAccountLoading.get(tokenId);
   // An explicit sign-in supersedes an unsigned background read. Other callers
   // await the current read instead of consuming an old cached failure.
-  if (pending && (!authenticate || pending.authenticate)) return pending.promise;
+  if (pending && !fresh && (!authenticate || pending.authenticate)) return pending.promise;
+  // A confirmed transaction needs a read begun after its receipt. An earlier
+  // response must not restore pre-creation, pre-funding or pre-mission state.
+  const priorSignIn = fresh && pending?.authenticate ? pending.promise : null;
+  if (fresh) state.agentAccounts.delete(tokenId);
   const request = { authenticate, message: "Checking your wallet sign-in…", promise: null };
   state.agentAccountLoading.set(tokenId, request);
   const isCurrent = () => state.agentAccountLoading.get(tokenId) === request
@@ -216,6 +220,7 @@ async function loadAgentAccountStatus({ authenticate = false } = {}) {
         if (!isCurrent()) return;
         request.message = message; renderAgentAccount();
       });
+      else if (priorSignIn) await priorSignIn;
       if (!isCurrent()) return null;
       request.message = "Checking autonomous readiness…";
       if (authenticate) renderAgentAccount();
@@ -2147,7 +2152,7 @@ async function activatePunkAgentMission(draft, report) {
       authorizationTransactionHash }), timeoutMs: 30_000 });
   assertSelection();
   state.agentAccounts.delete(tokenId); state.hydratedTokenId = null;
-  await loadAgentAccountStatus({ authenticate: false });
+  await loadAgentAccountStatus({ fresh: true });
   await hydrateSelected("activity");
   assertSelection();
   return receipt;
@@ -3061,7 +3066,7 @@ function setup() {
       const punk = state.selected, owner = state.wallet?.account;
       if (!punk || !owner) return;
       state.agentAccounts.delete(String(punk.tokenId));
-      await loadAgentAccountStatus({ authenticate: false });
+      await loadAgentAccountStatus({ fresh: true });
       if (state.selected !== punk || state.wallet?.account !== owner) return;
       activateTab('fund'); renderAgentGasFunding(); renderActivationGuide();
       set('[data-agent-gas-result]', 'Agent wallet verified. This check granted no new permission. Add gas next, then review your rules and Start mission. An existing active mission may resume when funded; no recall is needed to top up.');
@@ -3079,7 +3084,7 @@ function setup() {
       swarmWalletControl?.refresh();
       swarmReviewGate?.refresh();
       swarmControl?.refresh();
-      await Promise.all([loadAgentAccountStatus(), loadPunkBalances(punk)]);
+      await Promise.all([loadAgentAccountStatus({ fresh: true }), loadPunkBalances(punk)]);
       if (state.selected === punk && state.wallet?.account === selection.owner) renderSelected();
     } });
   gasFundingRecovery.refresh();
@@ -3147,7 +3152,7 @@ function setup() {
       }
       if (isSelected()) {
         one("[data-agent-gas-confirm]").checked = false;
-        await Promise.all([loadAgentAccountStatus(), loadPunkBalances(punk)]);
+        await Promise.all([loadAgentAccountStatus({ fresh: true }), loadPunkBalances(punk)]);
         if (isSelected()) {
           renderSelected();
           const nextStep = selectedAgentAccount()?.runtime?.sessionActive
@@ -3255,7 +3260,7 @@ function setup() {
       await waitForPunkWalletTransactionReceipt(provider, submitted.hash);
       if (agentFunding) {
         state.agentAccounts.delete(String(tokenId));
-        await loadAgentAccountStatus(); renderSelected();
+        await loadAgentAccountStatus({ fresh: true }); renderSelected();
       } else {
         punk.balanceLoaded = false; renderSelected(); await loadPunkBalances(punk);
       }
@@ -3390,7 +3395,14 @@ function setup() {
       state.ownershipLoadingAccount = null; state.punks = []; state.selected = null;
       renderRoster(); return;
     }
-    if (verifiedSameAccount || state.ownershipLoadingAccount === account) return;
+    if (verifiedSameAccount) {
+      // Mobile wallets may temporarily report no account/network while their
+      // app is foregrounded. Restore this selected Punk's cleared readiness
+      // when the same owner returns, without reconnecting or scanning the roster.
+      if (account !== previousAccount || wallet.chainId !== previousChain) void loadAgentAccountStatus({ fresh: true });
+      return;
+    }
+    if (state.ownershipLoadingAccount === account) return;
     const requestId = ++state.ownershipRequestId;
     state.ownershipLoadingAccount = account;
     if (state.ownershipAccount && state.ownershipAccount !== account) {
